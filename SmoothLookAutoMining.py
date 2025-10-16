@@ -7,26 +7,42 @@ import minescript
 import math
 import time
 
-
+# ============================================
+# CONFIGURATION OPTIONS
+# ============================================
 CONFIG = {
     # Block type to search for and break (use Minecraft block ID)
     # Examples: 'minecraft:iron_block', 'minecraft:diamond_ore', 
-    #           'minecraft:wheat[age=7]'
-    'target_block': 'minecraft:diamond_block',
+    #           'minecraft:gold_block', 'minecraft:stone', etc.
+    # For crops, use base name like 'minecraft:wheat' (will match all ages)
+    'target_block': 'minecraft:iron_block',
+    
+    # If True, match blocks ignoring their state (useful for crops with age)
+    # e.g., 'minecraft:wheat' will match 'minecraft:wheat[age=0]' through 'minecraft:wheat[age=7]'
+    'ignore_block_state': False,
     
     # Search distance in blocks (4.5 is typical survival reach, 5.0 for creative)
     'search_distance': 4.5,
     
     # Rotation speed: duration in seconds for camera rotation
     # Lower = faster, Higher = slower and smoother
-    'rotation_duration': 0.5,
+    'rotation_duration': 1.5,
     
     # Smoothness: number of steps for interpolation
     # Higher = smoother but more CPU intensive (30-120 recommended)
-    'rotation_steps': 60,
+    'rotation_steps': 90,
     
     # Cooldown in seconds before moving to next block
-    'block_cooldown': 0.1,
+    'block_cooldown': 0.8,
+    
+    # If True, continuously scan for new blocks after completing a batch
+    # Will keep running until no new blocks are found
+    'continuous_scan': True,
+    
+    # Key to press to trigger a new scan (uses GLFW key codes)
+    # Common keys: 89 = Y, 82 = R, 71 = G, 84 = T
+    # See: https://www.glfw.org/docs/3.3/group__keys.html
+    'rescan_key': 89,  # Y key
     
     # If True, visit blocks based on angular proximity (more realistic)
     # If False, visit blocks based on distance
@@ -36,20 +52,21 @@ CONFIG = {
     'break_blocks': True,
     
     # Pause in seconds after looking at block before breaking it
-    'break_delay': 0,
+    'break_delay': 0.3,
     
     # Time in seconds to hold attack button (for breaking blocks)
     # Increase this for blocks that take longer to break
-    'break_hold_time': 0,
+    'break_hold_time': 0.1,
 }
 # ============================================
 
-def find_all_blocks(max_distance=5, block_type='minecraft:iron_block'):
+def find_all_blocks(max_distance=5, block_type='minecraft:iron_block', ignore_state=False):
     """Find all blocks of specified type within max_distance (player hit range)."""
     player_pos = minescript.player_position()
     px, py, pz = player_pos
     
-    minescript.echo(f"Searching for {block_type} within {max_distance} blocks...")
+    search_mode = "with state ignored" if ignore_state else "exact match"
+    minescript.echo(f"Searching for {block_type} within {max_distance} blocks ({search_mode})...")
     
     # Search in a smaller cube around the player (within reach)
     search_range = max_distance
@@ -71,12 +88,25 @@ def find_all_blocks(max_distance=5, block_type='minecraft:iron_block'):
         block_types = minescript.getblocklist(positions_to_check)
         
         for i, found_block_type in enumerate(block_types):
-            if found_block_type == block_type:
+            # Check if block matches
+            is_match = False
+            
+            if ignore_state:
+                # Extract base block name (before '[' if present)
+                found_base = found_block_type.split('[')[0]
+                target_base = block_type.split('[')[0]
+                is_match = (found_base == target_base)
+            else:
+                # Exact match
+                is_match = (found_block_type == block_type)
+            
+            if is_match:
                 x, y, z = positions_to_check[i]
                 distance = math.sqrt((x - px)**2 + (y - py)**2 + (z - pz)**2)
                 blocks_found.append({
                     'position': (x, y, z),
-                    'distance': distance
+                    'distance': distance,
+                    'full_type': found_block_type  # Store the full block type with state
                 })
         
         minescript.echo(f"Search complete. Found {len(blocks_found)} block(s)")
@@ -219,18 +249,27 @@ def smooth_look_at(target_pos, duration=1.0, steps=60):
     yaw_diff = angle_difference(current_yaw, target_yaw)
     pitch_diff = angle_difference(current_pitch, target_pitch)
     
-    minescript.echo(f"Rotating from ({current_yaw:.1f}, {current_pitch:.1f}) to ({target_yaw:.1f}, {target_pitch:.1f})")
+    # Calculate total angular distance
+    angular_distance = math.sqrt(yaw_diff**2 + pitch_diff**2)
+    
+    # Scale duration based on angular distance (closer = faster)
+    if angular_distance < 15:
+        duration_scale = 0.3 + (angular_distance / 15) * 0.7  # 30% to 100% of duration
+        actual_duration = duration * duration_scale
+    else:
+        actual_duration = duration
     
     # Perform smooth interpolation
-    step_delay = duration / steps
+    step_delay = actual_duration / steps
     
     for i in range(steps + 1):
-        # Ease-in-out interpolation (smooth acceleration and deceleration)
+        # Base interpolation parameter (0.0 to 1.0)
         t = i / steps
-        # Smoothstep function for natural motion
+        
+        # Apply smoothstep for ease-in-out
         smooth_t = t * t * (3 - 2 * t)
         
-        # Interpolate angles
+        # Direct linear interpolation
         new_yaw = current_yaw + yaw_diff * smooth_t
         new_pitch = current_pitch + pitch_diff * smooth_t
         
@@ -241,15 +280,11 @@ def smooth_look_at(target_pos, duration=1.0, steps=60):
         if i < steps:
             time.sleep(step_delay)
     
-    minescript.echo("Camera rotation complete!")
-    
     # Break block if enabled
     if CONFIG['break_blocks']:
         if CONFIG['break_delay'] > 0:
-            minescript.echo(f"  Pausing {CONFIG['break_delay']}s before breaking...")
             time.sleep(CONFIG['break_delay'])
         
-        minescript.echo("  ⛏ Breaking block...")
         # Press and hold attack
         minescript.player_press_attack(True)
         time.sleep(CONFIG['break_hold_time'])
@@ -308,47 +343,108 @@ def main():
                    f"speed={CONFIG['rotation_duration']}s, " +
                    f"cooldown={CONFIG['block_cooldown']}s, " +
                    f"cluster_mode={CONFIG['use_cluster_mode']}, " +
-                   f"break_blocks={CONFIG['break_blocks']}")
+                   f"break_blocks={CONFIG['break_blocks']}, " +
+                   f"ignore_state={CONFIG['ignore_block_state']}")
     
-    player_pos = minescript.player_position()
+    # Get key name for display
+    key_names = {89: 'Y', 82: 'R', 71: 'G', 84: 'T'}
+    rescan_key_name = key_names.get(CONFIG['rescan_key'], f"key {CONFIG['rescan_key']}")
+    minescript.echo(f"\nPress '{rescan_key_name}' to start scanning | Open any GUI to exit")
     
-    # Find all target blocks
-    blocks = find_all_blocks(
-        max_distance=CONFIG['search_distance'],
-        block_type=CONFIG['target_block']
-    )
+    total_blocks_processed = 0
+    processed_positions = set()  # Track blocks we've already looked at
+    is_active = False  # Whether we're actively processing blocks
     
-    if blocks:
-        # Sort blocks based on configuration
-        if CONFIG['use_cluster_mode']:
-            minescript.echo("Using cluster mode (angular proximity sorting)...")
-            sorted_blocks = sort_blocks_by_viewing_order(blocks, player_pos)
-        else:
-            minescript.echo("Using distance mode (nearest first)...")
-            sorted_blocks = sorted(blocks, key=lambda b: b['distance'])
-        
-        minescript.echo(f"Found {len(sorted_blocks)} block(s). Starting smooth camera tour...")
-        
-        for i, block_info in enumerate(sorted_blocks):
+    # Setup event queue for key and screen events
+    event_queue = minescript.EventQueue()
+    event_queue.register_key_listener()
+    
+    try:
+        while True:
+            # Check for exit condition (GUI opened)
+            current_screen = minescript.screen_name()
+            if current_screen is not None:
+                minescript.echo(f"GUI opened ({current_screen}) - Exiting script...")
+                break
+            
+            # Check for scan key press to start/restart
+            try:
+                while True:
+                    event = event_queue.get(block=False)
+                    if event.type == "key":
+                        # Key down event (action == 1) and matches rescan key
+                        if event.action == 1 and event.key == CONFIG['rescan_key']:
+                            minescript.echo(f"\n'{rescan_key_name}' pressed - Starting new scan session!")
+                            processed_positions.clear()  # Clear processed list
+                            is_active = True
+            except:
+                pass  # No events in queue
+            
+            # Only process if active
+            if not is_active:
+                time.sleep(0.1)
+                continue
+            
+            player_pos = minescript.player_position()
+            
+            # Scan for all target blocks
+            blocks = find_all_blocks(
+                max_distance=CONFIG['search_distance'],
+                block_type=CONFIG['target_block'],
+                ignore_state=CONFIG['ignore_block_state']
+            )
+            
+            # Filter out already processed blocks
+            unprocessed_blocks = [b for b in blocks if b['position'] not in processed_positions]
+            
+            if not unprocessed_blocks:
+                minescript.echo(f"✓ No more unprocessed blocks found!")
+                minescript.echo(f"Total blocks processed in this session: {total_blocks_processed}")
+                minescript.echo(f"Press '{rescan_key_name}' to start new scan session or open GUI to exit")
+                is_active = False
+                total_blocks_processed = 0
+                time.sleep(0.1)
+                continue
+            
+            # Sort blocks based on configuration
+            if CONFIG['use_cluster_mode']:
+                sorted_blocks = sort_blocks_by_viewing_order(unprocessed_blocks, player_pos)
+            else:
+                sorted_blocks = sorted(unprocessed_blocks, key=lambda b: b['distance'])
+            
+            # Process only the first block in the sorted list
+            block_info = sorted_blocks[0]
+            
+            # Check for exit condition before processing
+            current_screen = minescript.screen_name()
+            if current_screen is not None:
+                minescript.echo(f"GUI opened ({current_screen}) - Exiting script...")
+                break
+            
             x, y, z = block_info['position']
             distance = block_info['distance']
+            full_type = block_info.get('full_type', CONFIG['target_block'])
             
-            minescript.echo(f"[{i+1}/{len(sorted_blocks)}] Looking at block at ({x}, {y}, {z}) - {distance:.1f}m away")
+            total_remaining = len(unprocessed_blocks)
+            minescript.echo(f"[{total_remaining} remaining] Looking at {full_type} at ({x}, {y}, {z}) - {distance:.1f}m away")
             
             # Smooth look with configured duration and steps
-            # Breaking happens inside smooth_look_at function
             smooth_look_at((x + 0.5, y + 0.5, z + 0.5), 
                          duration=CONFIG['rotation_duration'], 
                          steps=CONFIG['rotation_steps'])
             
-            # Pause between blocks (except after the last one)
-            if i < len(sorted_blocks) - 1:
-                minescript.echo(f"Pausing {CONFIG['block_cooldown']}s before next block...")
-                time.sleep(CONFIG['block_cooldown'])
-        
-        minescript.echo(f"✓ Tour complete! Visited {len(sorted_blocks)} block(s).")
-    else:
-        minescript.echo(f"✗ No {CONFIG['target_block']} found within reach ({CONFIG['search_distance']} blocks)!")
+            # Mark this block as processed
+            processed_positions.add(block_info['position'])
+            total_blocks_processed += 1
+            
+            # Pause before next scan/block
+            time.sleep(CONFIG['block_cooldown'])
+            
+            # Loop continues, will rescan automatically for next block
+    
+    finally:
+        minescript.echo(f"✓ Script ended. Total blocks processed: {total_blocks_processed}")
+
 
 # Run the script
 if __name__ == "__main__":
