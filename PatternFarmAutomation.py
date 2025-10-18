@@ -1,5 +1,5 @@
-# Macro decided to automate farming within a pattern, meaning it will go from right, forward, left. etc(You will need to setup a farm suitable for it)
-# Code is not made for any server, instead singleplayer. Meaning it does not have failsafes against checks.
+# Macro decided to automate farming within a pattern, meaning it will go from right, forward, left. etc(You will need to setup a farm suitable for it) 
+# Code is not made for any server, instead singleplayer. Meaning it does not have failsafes against checks. 
 # Getting banned, warned. etc is your own fault.
 
 import minescript as ms
@@ -12,6 +12,9 @@ CONFIG = {
     # Movement settings
     "forward_blocks": 4,  # How many blocks to move forward after reaching an end
     "initial_direction": "right",  # Initial direction: "right" or "left"
+    
+    # Breaking settings
+    "auto_break": True,  # Automatically break blocks while moving
     
     # Randomization settings (makes movement look more human)
     "position_variance": 0.15,  # Random position offset (0.0-0.3 recommended)
@@ -94,6 +97,10 @@ class FarmAutomation:
         # Enable sprinting if configured
         if CONFIG["enable_sprint"] and direction in ["forward", "backward"]:
             ms.player_press_sprint(True)
+        
+        # Enable auto-break if configured
+        if CONFIG["auto_break"]:
+            ms.player_press_attack(True)
             
         # Track positions to detect when stuck
         self.last_positions = []
@@ -133,6 +140,9 @@ class FarmAutomation:
                 
             if CONFIG["enable_sprint"]:
                 ms.player_press_sprint(False)
+            
+            if CONFIG["auto_break"]:
+                ms.player_press_attack(False)
                 
     def move_forward_blocks(self, blocks):
         """Move forward a specific number of blocks"""
@@ -147,6 +157,10 @@ class FarmAutomation:
         ms.player_press_forward(True)
         if CONFIG["enable_sprint"]:
             ms.player_press_sprint(True)
+        
+        # Enable auto-break if configured
+        if CONFIG["auto_break"]:
+            ms.player_press_attack(True)
         
         # Track positions for stuck detection
         self.last_positions = []
@@ -168,7 +182,7 @@ class FarmAutomation:
                 # Check if stuck (can't move forward anymore)
                 if len(self.last_positions) >= CONFIG["stuck_checks"]:
                     if self.is_stuck():
-                        self.log(f"Can't move forward further.")
+                        self.log(f"Can't move forward further (moved {distance_moved:.1f} blocks)")
                         break
                 
                 # Check if we've moved far enough
@@ -183,6 +197,8 @@ class FarmAutomation:
             ms.player_press_forward(False)
             if CONFIG["enable_sprint"]:
                 ms.player_press_sprint(False)
+            if CONFIG["auto_break"]:
+                ms.player_press_attack(False)
                 
     def swap_direction(self):
         """Swap between left and right direction"""
@@ -243,6 +259,7 @@ class FarmAutomation:
         ms.player_press_forward(False)
         ms.player_press_backward(False)
         ms.player_press_sprint(False)
+        ms.player_press_attack(False)
         self.log("Cleanup complete.")
 
 # ===== COMMAND LINE INTERFACE =====
@@ -257,6 +274,7 @@ Options:
   --start-right        : Start moving right (default)
   --start-left         : Start moving left
   --no-sprint          : Disable sprinting
+  --no-break           : Disable auto-breaking blocks
   --max-iter <n>       : Maximum iterations (default: 1000)
   --help               : Show this help message
 
@@ -264,7 +282,7 @@ Examples:
   \\farm_auto_move                    - Start with default settings
   \\farm_auto_move --forward 3        - Move 3 blocks forward per row
   \\farm_auto_move --start-left       - Start by moving left
-  \\farm_auto_move --forward 5 --no-sprint
+  \\farm_auto_move --forward 5 --no-sprint --no-break
 """
     print(help_text)
 
@@ -290,6 +308,8 @@ def main():
             CONFIG["initial_direction"] = "left"
         elif arg == "--no-sprint":
             CONFIG["enable_sprint"] = False
+        elif arg == "--no-break":
+            CONFIG["auto_break"] = False
         elif arg == "--max-iter":
             if i + 1 < len(args):
                 CONFIG["max_iterations"] = int(args[i + 1])
